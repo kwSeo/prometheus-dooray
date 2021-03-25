@@ -14,22 +14,40 @@ import (
 
 var logger = log.With(log.NewLogfmtLogger(os.Stdout), "ts", log.DefaultTimestamp, "caller", log.DefaultCaller)
 
-func main() {
-	var port int
-	var bindAddr string
-	var basePath string
-	var incomingURL string
-	flag.IntVar(&port, "server.port", 8080, "listen port of this server")
-	flag.StringVar(&bindAddr, "server.bind-addr", "", "bind address")
-	flag.StringVar(&basePath, "server.base-path", "", "base URL path of this server")
-	flag.StringVar(&incomingURL, "dooray.incoming-url", "", "incoming URL of Dooray Messanger")
-	flag.Parse()
+type Config struct {
+	Port     int
+	BindAddr string
+	BasePath string
+	Dooray   dooray.Config
 
-	listenAddr := fmt.Sprintf("%s:%d", bindAddr, port)
+	set *flag.FlagSet
+}
+
+func NewConfig(set *flag.FlagSet) *Config {
+	return &Config{
+		set: set,
+	}
+}
+
+func (c *Config) Load(args []string) error {
+	c.set.IntVar(&c.Port, "server.port", 8080, "listen port of this server")
+	c.set.StringVar(&c.BindAddr, "server.bind-addr", "", "bind address")
+	c.set.StringVar(&c.BasePath, "server.base-path", "", "base URL path of this server")
+	c.Dooray.RegisterFlags(c.set)
+	return c.set.Parse(args)
+}
+
+func main() {
+	cfg := NewConfig(flag.CommandLine)
+	if err := cfg.Load(os.Args[1:]); err != nil {
+		level.Error(logger).Log("err", err)
+		return
+	}
+	listenAddr := fmt.Sprintf("%s:%d", cfg.BindAddr, cfg.Port)
 	level.Info(logger).Log("msg", "Starting server.", "addr", listenAddr)
 
-	http.Handle(basePath+"/api/v1/alerts", dooray.NewAlertmanagerHandler(incomingURL, logger))
-	http.Handle(basePath+"/webhook", dooray.NewWebhookHandler(incomingURL, logger))
+	http.Handle(cfg.BasePath+"/api/v1/alerts", dooray.NewAlertmanagerHandler(cfg.Dooray, logger))
+	http.Handle(cfg.BasePath+"/webhook", dooray.NewWebhookHandler(cfg.Dooray, logger))
 	if err := http.ListenAndServe(listenAddr, nil); err != nil {
 		level.Error(logger).Log("err", err)
 		return

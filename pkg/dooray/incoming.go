@@ -3,6 +3,7 @@ package dooray
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"net/http"
 
@@ -12,6 +13,18 @@ import (
 )
 
 const ContentType = "application/json"
+
+type Config struct {
+	IncomingURL string
+	IconURL     string
+	BotName     string
+}
+
+func (c *Config) RegisterFlags(set *flag.FlagSet) {
+	set.StringVar(&c.IncomingURL, "dooray.incoming-url", "", "incoming URL of Dooray Messanger")
+	set.StringVar(&c.IconURL, "dooray.icon-url", "https://static.dooray.com/static_images/dooray-bot.png", "Icon URL of Dooray Messanger")
+	set.StringVar(&c.BotName, "dooray.bot-name", "Prometheus", "Bot name of Dooray messanger")
+}
 
 type Message struct {
 	BotName      string       `json:"botName"`
@@ -27,41 +40,6 @@ type Attachment struct {
 	Color     string `json:"color"`
 }
 
-func FromAlertmanager(alert prom.Alert) *Message {
-	text := "## Labels\n"
-	for k, v := range alert.Labels {
-		text += fmt.Sprintf("%s: %s\n", k, v)
-	}
-	text += "\n## Annotations\n"
-	for k, v := range alert.Annotations {
-		text += fmt.Sprintf("%s: %s\n", k, v)
-	}
-	return &Message{
-		BotName:      "Prometheus",
-		BotIconImage: "https://static.dooray.com/static_images/dooray-bot.png",
-		Text:         text,
-	}
-}
-
-func FromWebhook(webhook prom.Webhook) ([]*Message, error) {
-	if webhook.Version != prom.SupportedVersion {
-		return nil, errors.Errorf("unsupported version: %s", webhook.Version)
-	}
-	var messages []*Message
-	for _, alert := range webhook.Alerts {
-		message := FromAlertmanager(prom.Alert{
-			Labels:       alert.Labels,
-			Annotations:  alert.Annotations,
-			StartsAt:     alert.StartsAt,
-			EndsAt:       alert.EndsAt,
-			GeneratorURL: alert.GeneratorURL,
-		})
-		message.Text = fmt.Sprintf("---Status: %s---\n%s", alert.Status, message.Text)
-		messages = append(messages, message)
-	}
-	return messages, nil
-}
-
 func Send(incomingURL string, msg Message) error {
 	buf := new(bytes.Buffer)
 	if err := json.NewEncoder(buf).Encode(msg); err != nil {
@@ -75,4 +53,16 @@ func Send(incomingURL string, msg Message) error {
 		return errors.Errorf("Unsuccessful response code: %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func CreateText(alert prom.Alert) string {
+	text := "## Labels\n"
+	for k, v := range alert.Labels {
+		text += fmt.Sprintf("%s: %s\n", k, v)
+	}
+	text += "\n## Annotations\n"
+	for k, v := range alert.Annotations {
+		text += fmt.Sprintf("%s: %s\n", k, v)
+	}
+	return text
 }

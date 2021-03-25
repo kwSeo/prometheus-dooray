@@ -2,22 +2,24 @@ package dooray
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
+	"github.com/pkg/errors"
 
 	"github.com/kwseo/prometheus-dooray/pkg/prom"
 )
 
 type AlertmanagerHandler struct {
-	incomingURL string
+	cfg    Config
 	logger log.Logger
 }
 
-func NewAlertmanagerHandler(incomingURL string, logger log.Logger) *AlertmanagerHandler {
+func NewAlertmanagerHandler(cfg Config, logger log.Logger) *AlertmanagerHandler {
 	return &AlertmanagerHandler{
-		incomingURL: incomingURL,
+		cfg:    cfg,
 		logger: log.With(logger, "module", "AlertmanagerHandler"),
 	}
 }
@@ -31,22 +33,30 @@ func (h *AlertmanagerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	}
 
 	for _, alert := range alerts {
-		message := FromAlertmanager(alert)
-		if err := Send(h.incomingURL, *message); err != nil {
+		message := h.FromAlertmanager(alert)
+		if err := Send(h.cfg.IncomingURL, *message); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
 }
 
+func (h *AlertmanagerHandler) FromAlertmanager(alert prom.Alert) *Message {
+	return &Message{
+		BotName:      h.cfg.BotName,
+		BotIconImage: h.cfg.IconURL,
+		Text:         CreateText(alert),
+	}
+}
+
 type WebhookHandler struct {
-	incomingURL string
+	cfg    Config
 	logger log.Logger
 }
 
-func NewWebhookHandler(incomingURL string, logger log.Logger) *WebhookHandler {
+func NewWebhookHandler(cfg Config, logger log.Logger) *WebhookHandler {
 	return &WebhookHandler{
-		incomingURL: incomingURL,
+		cfg:    cfg,
 		logger: log.With(logger, "module", "WebhookHandler"),
 	}
 }
@@ -59,16 +69,37 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	messages, err := FromWebhook(webhook)
+	messages, err := h.FromWebhook(webhook)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	for _, message := range messages {
-		if err := Send(h.incomingURL, *message); err != nil {
+		if err := Send(h.cfg.IncomingURL, *message); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
 }
 
+func (h *WebhookHandler) FromWebhook(webhook prom.Webhook) ([]*Message, error) {
+	if webhook.Version != prom.SupportedVersion {
+		return nil, errors.Errorf("unsupported version: %s", webhook.Version)
+	}
+	var messages []*Message
+	for _, alert := range webhook.Alerts {
+		text := CreateText(prom.Alert{
+			Labels:       alert.Labels,
+			Annotations:  alert.Annotations,
+			StartsAt:     alert.StartsAt,
+			EndsAt:       alert.EndsAt,
+			GeneratorURL: alert.GeneratorURL,
+		})
+		messages = append(messages, &Message{
+			BotName:      h.cfg.BotName,
+			BotIconImage: h.cfg.IconURL,
+			Text:         fmt.Sprintf("---Status: %s---\n%s", alert.Status, text),
+		})
+	}
+	return messages, nil
+}
